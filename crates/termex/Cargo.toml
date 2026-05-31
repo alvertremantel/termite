@@ -1,0 +1,16 @@
+[package]
+name = "termex"
+version = "0.1.0"
+edition = "2024"
+description = "A single-document terminal reader and writer"
+license = "AGPL-3.0"
+authors = ["Geosmin Jones"]
+
+[[bin]]
+name = "termex"
+path = "src/main.rs"
+
+[dependencies]
+termex-app = { path = "../termex-app" }
+tokio.workspace = true
+color-eyre.workspace = true

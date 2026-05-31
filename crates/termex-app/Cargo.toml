@@ -1,0 +1,25 @@
+[package]
+name = "termex-app"
+version = "0.1.0"
+edition = "2024"
+description = "Termex single-document app orchestration and TUI"
+license = "AGPL-3.0"
+authors = ["Geosmin Jones"]
+
+[dependencies]
+jones-event = { path = "../jones-event" }
+jones-render = { path = "../jones-render" }
+jones-syntax = { path = "../jones-syntax" }
+jones-terminal = { path = "../jones-terminal" }
+jones-text = { path = "../jones-text" }
+jones-theme = { path = "../jones-theme" }
+jones-tui = { path = "../jones-tui" }
+termex-config = { path = "../termex-config" }
+termite-editor = { path = "../termite-editor" }
+ratatui.workspace = true
+crossterm.workspace = true
+tokio.workspace = true
+color-eyre.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

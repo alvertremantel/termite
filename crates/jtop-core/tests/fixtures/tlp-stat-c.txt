@@ -1,0 +1,3 @@
+/etc/tlp.d/00-base.conf
+/etc/tlp.d/50-laptop.conf
+/etc/tlp.conf

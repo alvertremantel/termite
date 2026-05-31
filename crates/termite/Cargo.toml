@@ -1,0 +1,16 @@
+[package]
+name = "termite"
+version = "0.2.1"
+edition = "2024"
+description = "A minimal terminal text editor"
+license = "AGPL-3.0"
+authors = ["Geosmin Jones"]
+
+[[bin]]
+name = "termite"
+path = "src/main.rs"
+
+[dependencies]
+termite-app = { path = "../termite-app" }
+tokio.workspace = true
+color-eyre.workspace = true

@@ -1,0 +1,12 @@
+[package]
+name = "termite-config"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0"
+
+[dependencies]
+jones-config = { path = "../jones-config" }
+serde.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

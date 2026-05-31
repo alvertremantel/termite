@@ -1,0 +1,12 @@
+[package]
+name = "jtop"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[[bin]]
+name = "jtop"
+path = "src/main.rs"
+
+[dependencies]
+jtop-app = { path = "../jtop-app" }

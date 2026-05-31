@@ -1,0 +1,31 @@
+[package]
+name = "termite-app"
+version = "0.2.1"
+edition = "2024"
+description = "Termite app orchestration and TUI"
+license = "AGPL-3.0"
+authors = ["Geosmin Jones"]
+
+[dependencies]
+jones-event = { path = "../jones-event" }
+jones-outline = { path = "../jones-outline" }
+jones-project-search = { path = "../jones-project-search" }
+jones-render = { path = "../jones-render" }
+jones-search = { path = "../jones-search" }
+jones-state = { path = "../jones-state" }
+jones-syntax = { path = "../jones-syntax" }
+jones-terminal = { path = "../jones-terminal" }
+jones-text = { path = "../jones-text" }
+jones-theme = { path = "../jones-theme" }
+jones-tui = { path = "../jones-tui" }
+jones-workspace = { path = "../jones-workspace" }
+termite-config = { path = "../termite-config" }
+termite-editor = { path = "../termite-editor" }
+ratatui.workspace = true
+crossterm.workspace = true
+tokio.workspace = true
+color-eyre.workspace = true
+dirs.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

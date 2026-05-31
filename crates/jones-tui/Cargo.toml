@@ -1,0 +1,10 @@
+[package]
+name = "jones-tui"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0"
+
+[dependencies]
+jones-state = { path = "../jones-state" }
+jones-theme = { path = "../jones-theme" }
+ratatui.workspace = true

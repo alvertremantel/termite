@@ -1,0 +1,11 @@
+[package]
+name = "jones-render"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0"
+
+[dependencies]
+jones-syntax = { path = "../jones-syntax" }
+jones-theme = { path = "../jones-theme" }
+pulldown-cmark.workspace = true
+ratatui.workspace = true

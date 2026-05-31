@@ -1,0 +1,10 @@
+[package]
+name = "jones-event"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0"
+
+[dependencies]
+crossterm.workspace = true
+futures-lite.workspace = true
+tokio.workspace = true

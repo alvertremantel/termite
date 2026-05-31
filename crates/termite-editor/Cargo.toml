@@ -1,0 +1,13 @@
+[package]
+name = "termite-editor"
+version = "0.2.1"
+edition = "2024"
+description = "Termite editor state and key handling"
+license = "AGPL-3.0"
+authors = ["Geosmin Jones"]
+
+[dependencies]
+jones-text = { path = "../jones-text" }
+crossterm.workspace = true
+color-eyre.workspace = true
+arboard = "3.4"
