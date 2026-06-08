@@ -15,6 +15,7 @@ pub struct VisualRow {
     boundaries: Vec<(usize, usize)>,
     source_start: usize,
     source_end: usize,
+    mapped: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -93,12 +94,15 @@ impl VisualDocument {
     }
 
     pub fn display_to_source(&self, row: usize, col: usize) -> Option<usize> {
-        self.rows.get(row).map(|row| row.source_at_col(col))
+        self.rows.get(row).and_then(|row| row.source_at_col(col))
     }
 
     pub fn source_to_display(&self, char_pos: usize) -> Option<(usize, usize)> {
         let mut closest = None;
         for (row_idx, row) in self.rows.iter().enumerate() {
+            if !row.mapped {
+                continue;
+            }
             if char_pos < row.source_start {
                 continue;
             }
@@ -119,6 +123,18 @@ impl VisualRow {
             boundaries: vec![(source, 0)],
             source_start: source,
             source_end: source,
+            mapped: true,
+        }
+    }
+
+    fn unmapped_blank() -> Self {
+        Self {
+            spans: Vec::new(),
+            col_sources: Vec::new(),
+            boundaries: Vec::new(),
+            source_start: 0,
+            source_end: 0,
+            mapped: false,
         }
     }
 
@@ -166,6 +182,7 @@ impl VisualRow {
             boundaries,
             source_start,
             source_end,
+            mapped: true,
         }
     }
 
@@ -196,11 +213,13 @@ impl VisualRow {
         self.col_sources.len()
     }
 
-    fn source_at_col(&self, col: usize) -> usize {
-        self.col_sources
-            .get(col)
-            .copied()
-            .unwrap_or(self.source_end)
+    fn source_at_col(&self, col: usize) -> Option<usize> {
+        self.mapped.then(|| {
+            self.col_sources
+                .get(col)
+                .copied()
+                .unwrap_or(self.source_end)
+        })
     }
 
     fn col_for_source(&self, char_pos: usize) -> usize {
@@ -227,7 +246,7 @@ fn wrap_cells(
         return vec![
             line_source
                 .map(|(start, _)| VisualRow::blank(start))
-                .unwrap_or_else(|| VisualRow::blank(0)),
+                .unwrap_or_else(VisualRow::unmapped_blank),
         ];
     }
 
@@ -323,7 +342,7 @@ impl CellWrapper {
             self.rows.push(VisualRow::from_cells(self.current));
         }
         if self.rows.is_empty() {
-            self.rows.push(VisualRow::blank(0));
+            self.rows.push(VisualRow::unmapped_blank());
         }
         self.rows
     }
@@ -418,5 +437,29 @@ mod tests {
         assert_eq!(doc.source_to_display(6), Some((0, 6)));
         assert_eq!(doc.display_to_source(1, 6), Some(11));
         assert_eq!(doc.display_to_source(2, 6), Some(18));
+    }
+
+    #[test]
+    fn trailing_rendered_whitespace_maps_to_previous_visible_row() {
+        let rendered = render_markdown_mapped("hello ");
+        let doc = VisualDocument::from_rendered(&rendered, 20);
+
+        assert_eq!(doc.source_to_display(6), Some((0, 5)));
+    }
+
+    #[test]
+    fn real_newline_after_text_maps_to_next_visual_row() {
+        let rendered = render_markdown_mapped("hello\n");
+        let doc = VisualDocument::from_rendered(&rendered, 20);
+
+        assert_eq!(doc.source_to_display(6), Some((1, 0)));
+    }
+
+    #[test]
+    fn incomplete_hidden_markdown_marker_stays_near_its_source_line() {
+        let rendered = render_markdown_mapped("##\n\nnext");
+        let doc = VisualDocument::from_rendered(&rendered, 20);
+
+        assert_eq!(doc.source_to_display(2), Some((0, 0)));
     }
 }

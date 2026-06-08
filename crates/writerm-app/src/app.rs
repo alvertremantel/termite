@@ -892,6 +892,55 @@ mod tests {
     }
 
     #[test]
+    fn cursor_after_space_stays_on_current_visual_row_in_rendered_mode() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "hello").unwrap();
+        let mut app = app_at(path);
+        app.document_area = Rect::new(0, 0, 20, 3);
+        app.editor.move_cursor_to_char_pos(5);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+
+        assert_eq!(app.editor.cursor_char_pos(), 6);
+        assert_eq!(app.visual_document().source_to_display(6), Some((0, 5)));
+        assert_eq!(app.document_scroll, 0);
+    }
+
+    #[test]
+    fn cursor_after_newline_moves_to_real_next_visual_row() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "hello").unwrap();
+        let mut app = app_at(path);
+        app.document_area = Rect::new(0, 0, 20, 3);
+        app.editor.move_cursor_to_char_pos(5);
+
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(app.editor.cursor_char_pos(), 6);
+        assert_eq!(app.visual_document().source_to_display(6), Some((1, 0)));
+        assert_eq!(app.document_scroll, 0);
+    }
+
+    #[test]
+    fn cursor_after_incomplete_markdown_marker_does_not_jump_to_bottom() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "\n\nnext").unwrap();
+        let mut app = app_at(path);
+        app.document_area = Rect::new(0, 0, 20, 4);
+        app.editor.move_cursor_to_char_pos(0);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('#'), KeyModifiers::NONE));
+
+        assert_eq!(app.editor.cursor_char_pos(), 2);
+        assert_eq!(app.visual_document().source_to_display(2), Some((0, 0)));
+        assert_eq!(app.document_scroll, 0);
+    }
+
+    #[test]
     fn down_arrow_moves_by_wrapped_visual_rows_inside_one_paragraph() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("note.md");

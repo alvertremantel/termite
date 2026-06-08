@@ -137,15 +137,11 @@ fn draw_top_ribbon(frame: &mut Frame, app: &WritermApp, area: Rect) {
 }
 
 fn draw_bottom_bar(frame: &mut Frame, app: &mut WritermApp, area: Rect) {
-    let mode = if app.source_peek {
-        "source"
-    } else {
-        "rendered"
-    };
+    let render = if app.source_peek { "off" } else { "on" };
     let headings = if app.show_headings { "on" } else { "off" };
     let files = if app.show_files { "on" } else { "off" };
     let text = format!(
-        " Ctrl-S save  Ctrl-B/I/K  Ctrl-M {mode}  [F3 headings:{headings}]  [F2 files:{files}]  Ctrl-N new  Ctrl-Q quit "
+        " Ctrl-S save  Ctrl-B/I/K  [Ctrl-M render:{render}]  [F3 headings:{headings}]  [F2 files:{files}]  Ctrl-N new  Ctrl-Q quit "
     );
     set_control_areas(app, area, &text, headings, files);
     frame.render_widget(
@@ -300,6 +296,7 @@ fn truncate(s: &str, max_width: usize) -> String {
 mod tests {
     use super::*;
     use crate::app::WritermApp;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use tempfile::TempDir;
@@ -386,5 +383,27 @@ mod tests {
 
         assert!(rows[1].contains("alpha beta gamma"));
         assert!(rows[2].contains("delta epsilon"));
+    }
+
+    #[test]
+    fn ctrl_m_disables_markdown_rendering_and_label_reports_state() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "# Title").unwrap();
+        let backend = TestBackend::new(80, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = WritermApp::with_config(Some(path), Config::default()).unwrap();
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let rendered = rendered_buffer(&terminal);
+        assert!(rendered.contains("[Ctrl-M render:on]"));
+        assert!(!rendered.contains("# Title"));
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::CONTROL));
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let source = rendered_buffer(&terminal);
+
+        assert!(source.contains("[Ctrl-M render:off]"));
+        assert!(source.contains("# Title"));
     }
 }
