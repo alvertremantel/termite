@@ -1,5 +1,6 @@
 pub mod app;
 pub mod draw;
+mod visual;
 
 pub use app::WritermApp;
 

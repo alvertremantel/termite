@@ -4,8 +4,8 @@ use jones_workspace::WorkspaceEntryKind;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
 
 const MIN_DOCUMENT_WIDTH: u16 = 40;
 const SIDEBAR_GAP: u16 = 2;
@@ -189,66 +189,24 @@ fn draw_headings(frame: &mut Frame, app: &WritermApp, area: Rect) {
 
 fn draw_document(frame: &mut Frame, app: &mut WritermApp, area: Rect) {
     app.refresh_render_cache();
-    let text = if app.source_peek {
-        source_text(app, area.height as usize)
-    } else {
-        rendered_text(app, area.height as usize)
-    };
+    let visual = app.visual_document();
+    let text = visual.to_text(app.document_scroll, area.height as usize);
     frame.render_widget(
-        Paragraph::new(text)
-            .style(Style::default().fg(theme::text_primary()))
-            .wrap(Wrap { trim: false }),
+        Paragraph::new(text).style(Style::default().fg(theme::text_primary())),
         area,
     );
 
-    if let Some((x, y)) = cursor_position(app, area) {
+    if let Some((x, y)) = cursor_position(app, area, &visual) {
         frame.set_cursor_position((x, y));
     }
 }
 
-fn source_text(app: &WritermApp, height: usize) -> Text<'static> {
-    let lines = app
-        .editor
-        .text()
-        .lines()
-        .skip(app.document_scroll)
-        .take(height)
-        .map(|line| {
-            Line::from(Span::styled(
-                line.to_string(),
-                Style::default().fg(theme::text_primary()),
-            ))
-        })
-        .collect::<Vec<_>>();
-    Text::from(lines)
-}
-
-fn rendered_text(app: &WritermApp, height: usize) -> Text<'static> {
-    Text::from(
-        app.rendered
-            .lines
-            .iter()
-            .skip(app.document_scroll)
-            .take(height)
-            .map(|line| {
-                Line::from(
-                    line.spans
-                        .iter()
-                        .map(|span| Span::styled(span.content.clone(), span.style))
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect::<Vec<_>>(),
-    )
-}
-
-fn cursor_position(app: &WritermApp, area: Rect) -> Option<(u16, u16)> {
-    let (row, col) = if app.source_peek {
-        (app.editor.state.cursor_line, app.editor.state.cursor_col)
-    } else {
-        app.rendered
-            .source_to_display(app.editor.cursor_char_pos())?
-    };
+fn cursor_position(
+    app: &WritermApp,
+    area: Rect,
+    visual: &crate::visual::VisualDocument,
+) -> Option<(u16, u16)> {
+    let (row, col) = visual.source_to_display(app.editor.cursor_char_pos())?;
     if row < app.document_scroll {
         return None;
     }

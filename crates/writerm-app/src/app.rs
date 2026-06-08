@@ -4,6 +4,7 @@ use jones_editor::{EditorAction, EditorContext};
 use jones_event::{AppEvent, EventHandler};
 use jones_outline::{self as outline, OutlineEntry};
 use jones_render::{RenderedDocument, render_markdown_mapped};
+use jones_theme as theme;
 use jones_workspace::{self as workspace, WorkspaceEntry, WorkspaceOptions, WorkspaceSortMode};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
@@ -46,6 +47,7 @@ pub struct WritermApp {
     pub headings_control_area: Rect,
     pub files_control_area: Rect,
     pub drag_selecting: bool,
+    desired_display_col: Option<usize>,
     last_edit: Option<Instant>,
     needs_redraw: bool,
 }
@@ -105,6 +107,7 @@ impl WritermApp {
             headings_control_area: Rect::default(),
             files_control_area: Rect::default(),
             drag_selecting: false,
+            desired_display_col: None,
             last_edit: None,
             needs_redraw: true,
         })
@@ -155,6 +158,8 @@ impl WritermApp {
         }
 
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         match key.code {
             KeyCode::Char('q') if ctrl => {
                 self.quit();
@@ -181,18 +186,23 @@ impl WritermApp {
                 self.prompt_buffer.clear();
             }
             KeyCode::PageUp => {
+                self.desired_display_col = None;
                 self.document_scroll = self
                     .document_scroll
                     .saturating_sub(self.document_area.height.max(1) as usize);
             }
             KeyCode::PageDown => {
+                self.desired_display_col = None;
                 self.document_scroll += self.document_area.height.max(1) as usize;
             }
+            KeyCode::Up if !ctrl && !alt => self.move_visual_vertical(-1, shift),
+            KeyCode::Down if !ctrl && !alt => self.move_visual_vertical(1, shift),
             _ => self.handle_editor_key(key),
         }
     }
 
     fn handle_editor_key(&mut self, key: KeyEvent) {
+        self.desired_display_col = None;
         let version_before = self.editor.buffer.version();
         self.editor.viewport_height = self.document_area.height.max(1) as usize;
         let action = self.editor.handle_key(key);
@@ -294,9 +304,11 @@ impl WritermApp {
                 self.drag_selecting = false;
             }
             MouseEventKind::ScrollUp => {
+                self.desired_display_col = None;
                 self.document_scroll = self.document_scroll.saturating_sub(3);
             }
             MouseEventKind::ScrollDown => {
+                self.desired_display_col = None;
                 self.document_scroll = self.document_scroll.saturating_add(3);
             }
             _ => {}
@@ -340,25 +352,10 @@ impl WritermApp {
         let rel_row = row.saturating_sub(self.document_area.y) as usize;
         let rel_col = col.saturating_sub(self.document_area.x) as usize;
         let display_row = self.document_scroll + rel_row;
-        let char_pos = if self.source_peek {
-            let line = self.document_scroll + rel_row;
-            let line = line.min(self.editor.buffer.line_count().saturating_sub(1));
-            let rope = self.editor.buffer.rope();
-            let line_start = rope.line_to_char(line);
-            let line_slice = rope.line(line);
-            let mut line_len = line_slice.len_chars();
-            if line_len > 0 && line_slice.char(line_len - 1) == '\n' {
-                line_len -= 1;
-                if line_len > 0 && line_slice.char(line_len - 1) == '\r' {
-                    line_len -= 1;
-                }
-            }
-            line_start + rel_col.min(line_len)
-        } else {
-            self.rendered
-                .display_to_source(display_row, rel_col)
-                .unwrap_or_else(|| self.editor.cursor_char_pos())
-        };
+        let char_pos = self
+            .visual_document()
+            .display_to_source(display_row, rel_col)
+            .unwrap_or_else(|| self.editor.cursor_char_pos());
 
         if extend_selection {
             if self.editor.state.selection.is_none() {
@@ -370,6 +367,7 @@ impl WritermApp {
             self.editor.state.clear_selection();
             self.editor.move_cursor_to_char_pos(char_pos);
         }
+        self.desired_display_col = None;
         self.ensure_cursor_visible();
     }
 
@@ -428,6 +426,42 @@ impl WritermApp {
         true
     }
 
+    fn move_visual_vertical(&mut self, delta: isize, extend_selection: bool) {
+        self.refresh_render_cache();
+        let visual = self.visual_document();
+        let Some((row, col)) = visual.source_to_display(self.editor.cursor_char_pos()) else {
+            return;
+        };
+        let target_col = self.desired_display_col.unwrap_or(col);
+        let target_row = if delta < 0 {
+            row.checked_sub(delta.unsigned_abs())
+        } else {
+            Some(row.saturating_add(delta as usize))
+        };
+        let Some(target_row) = target_row else {
+            return;
+        };
+        if target_row >= visual.rows.len() {
+            return;
+        }
+        let Some(char_pos) = visual.display_to_source(target_row, target_col) else {
+            return;
+        };
+
+        if extend_selection {
+            if self.editor.state.selection.is_none() {
+                self.editor.state.start_selection();
+            }
+            self.editor.move_cursor_to_char_pos(char_pos);
+            self.editor.state.extend_selection();
+        } else {
+            self.editor.state.clear_selection();
+            self.editor.move_cursor_to_char_pos(char_pos);
+        }
+        self.desired_display_col = Some(target_col);
+        self.ensure_cursor_visible();
+    }
+
     pub fn change_cwd(&mut self, path: PathBuf) {
         let cwd = path.canonicalize().unwrap_or(path);
         if cwd.is_dir() {
@@ -475,25 +509,27 @@ impl WritermApp {
     }
 
     pub fn ensure_cursor_visible(&mut self) {
-        if self.source_peek {
-            let row = self.editor.state.cursor_line;
-            ensure_row_visible(
-                &mut self.document_scroll,
-                row,
-                self.document_area.height as usize,
-            );
-            return;
-        }
         self.refresh_render_cache();
-        if let Some((row, _)) = self
-            .rendered
-            .source_to_display(self.editor.cursor_char_pos())
-        {
+        let visual = self.visual_document();
+        if let Some((row, _)) = visual.source_to_display(self.editor.cursor_char_pos()) {
             ensure_row_visible(
                 &mut self.document_scroll,
                 row,
                 self.document_area.height as usize,
             );
+        }
+    }
+
+    pub(crate) fn visual_document(&self) -> crate::visual::VisualDocument {
+        let width = self.document_area.width.max(1) as usize;
+        if self.source_peek {
+            crate::visual::VisualDocument::from_source(
+                &self.editor.text(),
+                width,
+                ratatui::style::Style::default().fg(theme::text_primary()),
+            )
+        } else {
+            crate::visual::VisualDocument::from_rendered(&self.rendered, width)
         }
     }
 }
@@ -853,6 +889,85 @@ mod tests {
         app.click_document(30, 0, false);
 
         assert_eq!(app.editor.cursor_char_pos(), 3);
+    }
+
+    #[test]
+    fn down_arrow_moves_by_wrapped_visual_rows_inside_one_paragraph() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "alpha beta gamma delta").unwrap();
+        let mut app = app_at(path);
+        app.document_area = Rect::new(0, 0, 10, 4);
+        app.editor.move_cursor_to_char_pos(2);
+
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+
+        assert_eq!(app.editor.state.cursor_line, 0);
+        assert_eq!(app.editor.cursor_char_pos(), 13);
+
+        app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+
+        assert_eq!(app.editor.cursor_char_pos(), 2);
+    }
+
+    #[test]
+    fn repeated_down_preserves_visual_column_across_short_wrapped_rows() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "abcdefgh ij klmnopqr").unwrap();
+        let mut app = app_at(path);
+        app.document_area = Rect::new(0, 0, 8, 4);
+        app.editor.move_cursor_to_char_pos(6);
+
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+
+        assert_eq!(app.editor.cursor_char_pos(), 11);
+
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+
+        assert_eq!(app.editor.cursor_char_pos(), 18);
+    }
+
+    #[test]
+    fn shifted_visual_down_extends_selection_on_wrapped_rows() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "alpha beta gamma").unwrap();
+        let mut app = app_at(path);
+        app.document_area = Rect::new(0, 0, 10, 4);
+        app.editor.move_cursor_to_char_pos(1);
+
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+
+        let rope = app.editor.buffer.rope();
+        assert_eq!(app.editor.state.selected_char_range(rope), Some((1, 12)));
+    }
+
+    #[test]
+    fn wrapped_document_click_maps_visible_row_to_source_position() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "alpha beta gamma").unwrap();
+        let mut app = app_at(path);
+        app.document_area = Rect::new(0, 0, 10, 4);
+
+        app.click_document(1, 1, false);
+
+        assert_eq!(app.editor.cursor_char_pos(), 12);
+    }
+
+    #[test]
+    fn cursor_visibility_uses_wrapped_visual_rows() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "alpha beta gamma").unwrap();
+        let mut app = app_at(path);
+        app.document_area = Rect::new(0, 0, 10, 1);
+        app.editor.move_cursor_to_char_pos(13);
+
+        app.ensure_cursor_visible();
+
+        assert_eq!(app.document_scroll, 1);
     }
 
     #[test]

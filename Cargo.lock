@@ -6729,6 +6729,7 @@ dependencies = [
  "jones-workspace",
  "ratatui",
  "tempfile",
+ "unicode-width 0.2.2",
  "writerm-config",
 ]
 
