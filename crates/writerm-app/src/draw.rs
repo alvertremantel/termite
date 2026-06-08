@@ -5,9 +5,10 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Paragraph, Wrap};
 
 const MIN_DOCUMENT_WIDTH: u16 = 40;
+const SIDEBAR_GAP: u16 = 2;
 
 pub fn draw(frame: &mut Frame, app: &mut WritermApp) {
     frame.render_widget(
@@ -32,23 +33,32 @@ pub fn draw(frame: &mut Frame, app: &mut WritermApp) {
 
 fn draw_body(frame: &mut Frame, app: &mut WritermApp, area: Rect) {
     let headings_w = if app.show_headings
-        && area.width >= MIN_DOCUMENT_WIDTH + app.config.layout.headings_width
+        && area.width >= MIN_DOCUMENT_WIDTH + app.config.layout.headings_width + SIDEBAR_GAP
     {
         app.config.layout.headings_width
     } else {
         0
     };
+    let headings_gap_w = if headings_w > 0 { SIDEBAR_GAP } else { 0 };
     let files_w = if app.show_files
-        && area.width >= MIN_DOCUMENT_WIDTH + headings_w + app.config.layout.files_width
+        && area.width
+            >= MIN_DOCUMENT_WIDTH
+                + headings_w
+                + headings_gap_w
+                + app.config.layout.files_width
+                + SIDEBAR_GAP
     {
         app.config.layout.files_width
     } else {
         0
     };
+    let files_gap_w = if files_w > 0 { SIDEBAR_GAP } else { 0 };
 
     let chunks = Layout::horizontal([
         Constraint::Length(headings_w),
+        Constraint::Length(headings_gap_w),
         Constraint::Min(MIN_DOCUMENT_WIDTH.min(area.width)),
+        Constraint::Length(files_gap_w),
         Constraint::Length(files_w),
     ])
     .split(area);
@@ -58,9 +68,9 @@ fn draw_body(frame: &mut Frame, app: &mut WritermApp, area: Rect) {
     } else {
         Rect::default()
     };
-    app.document_area = chunks[1];
+    app.document_area = chunks[2];
     app.files_area = if files_w > 0 {
-        chunks[2]
+        chunks[4]
     } else {
         Rect::default()
     };
@@ -68,9 +78,9 @@ fn draw_body(frame: &mut Frame, app: &mut WritermApp, area: Rect) {
     if headings_w > 0 {
         draw_headings(frame, app, chunks[0]);
     }
-    draw_document(frame, app, chunks[1]);
+    draw_document(frame, app, chunks[2]);
     if files_w > 0 {
-        draw_files(frame, app, chunks[2]);
+        draw_files(frame, app, chunks[4]);
     }
 }
 
@@ -126,15 +136,18 @@ fn draw_top_ribbon(frame: &mut Frame, app: &WritermApp, area: Rect) {
     );
 }
 
-fn draw_bottom_bar(frame: &mut Frame, app: &WritermApp, area: Rect) {
+fn draw_bottom_bar(frame: &mut Frame, app: &mut WritermApp, area: Rect) {
     let mode = if app.source_peek {
         "source"
     } else {
         "rendered"
     };
+    let headings = if app.show_headings { "on" } else { "off" };
+    let files = if app.show_files { "on" } else { "off" };
     let text = format!(
-        " Ctrl-S save  Ctrl-B/I/K format  Ctrl-1..6 heading  Ctrl-F find  Ctrl-M {mode}  F2 files  F3 headings  Ctrl-N new  Ctrl-Q quit "
+        " Ctrl-S save  Ctrl-B/I/K  Ctrl-M {mode}  [F3 headings:{headings}]  [F2 files:{files}]  Ctrl-N new  Ctrl-Q quit "
     );
+    set_control_areas(app, area, &text, headings, files);
     frame.render_widget(
         Paragraph::new(truncate(&text, area.width as usize)).style(
             Style::default()
@@ -182,7 +195,9 @@ fn draw_document(frame: &mut Frame, app: &mut WritermApp, area: Rect) {
         rendered_text(app, area.height as usize)
     };
     frame.render_widget(
-        Paragraph::new(text).style(Style::default().fg(theme::text_primary())),
+        Paragraph::new(text)
+            .style(Style::default().fg(theme::text_primary()))
+            .wrap(Wrap { trim: false }),
         area,
     );
 
@@ -295,6 +310,30 @@ fn draw_prompt(frame: &mut Frame, app: &WritermApp, area: Rect) {
     );
 }
 
+fn set_control_areas(app: &mut WritermApp, area: Rect, text: &str, headings: &str, files: &str) {
+    let headings_label = format!("[F3 headings:{headings}]");
+    let files_label = format!("[F2 files:{files}]");
+    app.headings_control_area = control_area(area, text, &headings_label);
+    app.files_control_area = control_area(area, text, &files_label);
+}
+
+fn control_area(area: Rect, text: &str, label: &str) -> Rect {
+    let Some(start) = text.find(label) else {
+        return Rect::default();
+    };
+    let start = start as u16;
+    let width = label.len() as u16;
+    if start >= area.width {
+        return Rect::default();
+    }
+    Rect::new(
+        area.x + start,
+        area.y,
+        width.min(area.width.saturating_sub(start)),
+        area.height.min(1),
+    )
+}
+
 fn truncate(s: &str, max_width: usize) -> String {
     s.chars().take(max_width).collect()
 }
@@ -318,6 +357,17 @@ mod tests {
             .collect()
     }
 
+    fn rendered_rows(terminal: &Terminal<TestBackend>) -> Vec<String> {
+        let buffer = terminal.backend().buffer();
+        (0..buffer.area.height)
+            .map(|row| {
+                (0..buffer.area.width)
+                    .map(|col| buffer[(col, row)].symbol())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
     #[test]
     fn renders_ribbon_headings_document_files_and_keybar() {
         let dir = TempDir::new().unwrap();
@@ -334,9 +384,15 @@ mod tests {
         assert!(rendered.contains("Title"));
         assert!(rendered.contains("Body text"));
         assert!(rendered.contains("Ctrl-S save"));
+        assert!(rendered.contains("[F3 headings:on]"));
+        assert!(rendered.contains("[F2 files:on]"));
         assert!(app.headings_area.width > 0);
         assert!(app.document_area.width > 0);
         assert!(app.files_area.width > 0);
+        assert!(app.document_area.x >= app.headings_area.x + app.headings_area.width + SIDEBAR_GAP);
+        assert!(app.files_area.x >= app.document_area.x + app.document_area.width + SIDEBAR_GAP);
+        assert!(app.headings_control_area.width > 0);
+        assert!(app.files_control_area.width > 0);
     }
 
     #[test]
@@ -356,5 +412,21 @@ mod tests {
         assert!(app.document_area.width > 0);
         assert!(!rendered.contains('┌'));
         assert!(!rendered.contains('│'));
+    }
+
+    #[test]
+    fn long_document_lines_wrap_in_the_writing_surface() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "alpha beta gamma delta epsilon zeta").unwrap();
+        let backend = TestBackend::new(20, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = WritermApp::with_config(Some(path), Config::default()).unwrap();
+
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let rows = rendered_rows(&terminal);
+
+        assert!(rows[1].contains("alpha beta gamma"));
+        assert!(rows[2].contains("delta epsilon"));
     }
 }

@@ -43,6 +43,8 @@ pub struct WritermApp {
     pub headings_area: Rect,
     pub document_area: Rect,
     pub files_area: Rect,
+    pub headings_control_area: Rect,
+    pub files_control_area: Rect,
     pub drag_selecting: bool,
     last_edit: Option<Instant>,
     needs_redraw: bool,
@@ -100,6 +102,8 @@ impl WritermApp {
             headings_area: Rect::default(),
             document_area: Rect::default(),
             files_area: Rect::default(),
+            headings_control_area: Rect::default(),
+            files_control_area: Rect::default(),
             drag_selecting: false,
             last_edit: None,
             needs_redraw: true,
@@ -267,7 +271,14 @@ impl WritermApp {
     fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                if point_in(self.headings_area, mouse.column, mouse.row) {
+                if self.prompt_mode.is_some() {
+                    return;
+                }
+                if point_in(self.headings_control_area, mouse.column, mouse.row) {
+                    self.show_headings = !self.show_headings;
+                } else if point_in(self.files_control_area, mouse.column, mouse.row) {
+                    self.show_files = !self.show_files;
+                } else if point_in(self.headings_area, mouse.column, mouse.row) {
                     self.click_heading(mouse.row);
                 } else if point_in(self.files_area, mouse.column, mouse.row) {
                     self.click_file(mouse.row);
@@ -714,6 +725,50 @@ mod tests {
         let app = app_at(path);
 
         assert!(app.source_peek);
+    }
+
+    #[test]
+    fn sidebar_keys_toggle_each_sidebar_independently() {
+        let dir = TempDir::new().unwrap();
+        let mut app = app_at(dir.path().to_path_buf());
+
+        app.handle_key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE));
+
+        assert!(app.show_headings);
+        assert!(!app.show_files);
+
+        app.handle_key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE));
+
+        assert!(!app.show_headings);
+        assert!(!app.show_files);
+    }
+
+    #[test]
+    fn sidebar_control_clicks_toggle_each_sidebar_independently() {
+        let dir = TempDir::new().unwrap();
+        let mut app = app_at(dir.path().to_path_buf());
+        app.headings_control_area = Rect::new(4, 9, 18, 1);
+        app.files_control_area = Rect::new(24, 9, 14, 1);
+
+        app.handle_event(AppEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: 9,
+            modifiers: KeyModifiers::NONE,
+        }));
+
+        assert!(!app.show_headings);
+        assert!(app.show_files);
+
+        app.handle_event(AppEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 25,
+            row: 9,
+            modifiers: KeyModifiers::NONE,
+        }));
+
+        assert!(!app.show_headings);
+        assert!(!app.show_files);
     }
 
     #[test]
