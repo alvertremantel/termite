@@ -1312,6 +1312,54 @@ mod tests {
     }
 
     #[test]
+    fn typing_on_blank_line_after_down_does_not_render_on_previous_paragraph() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "alpha beta gamma\n\n# Heading").unwrap();
+        let mut app = app_at(path);
+        app.document_area = Rect::new(0, 0, 40, 8);
+        app.editor.move_cursor_to_char_pos(0);
+
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+
+        let insert_pos = app.editor.cursor_char_pos();
+        assert_eq!(insert_pos, 17);
+        let visible_cursor = app.visual_document().source_to_display(insert_pos);
+        assert_eq!(visible_cursor, Some((1, 0)));
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+
+        assert_eq!(
+            app.visual_document().source_to_display(insert_pos),
+            visible_cursor
+        );
+    }
+
+    #[test]
+    fn typing_after_down_inside_inline_code_stays_at_visible_cursor() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "**alpha beta gamma**\n`delta epsilon zeta`").unwrap();
+        let mut app = app_at(path);
+        app.document_area = Rect::new(0, 0, 10, 8);
+        app.editor.move_cursor_to_char_pos(21);
+
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+
+        let insert_pos = app.editor.cursor_char_pos();
+        assert_eq!(insert_pos, 27);
+        let visible_cursor = app.visual_document().source_to_display(insert_pos);
+        assert_eq!(visible_cursor, Some((2, 5)));
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+
+        assert_eq!(
+            app.visual_document().source_to_display(insert_pos),
+            visible_cursor
+        );
+    }
+
+    #[test]
     fn modified_vertical_keys_do_not_fall_back_to_raw_source_movement() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("note.md");

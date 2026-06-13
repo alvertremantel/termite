@@ -238,15 +238,14 @@ impl<'a> MappedMarkdownRenderer<'a> {
                 }
             }
             Event::Code(code) => {
+                let source_range = self.inline_code_source_range(range, code.as_ref());
                 self.push_text(
                     code.as_ref(),
-                    Some(range),
+                    Some(source_range),
                     Style::default().fg(theme::code_fg()).bg(theme::code_bg()),
                 );
             }
-            Event::SoftBreak => {
-                self.push_text(" ", Some(range), self.current_style());
-            }
+            Event::SoftBreak => self.finish_line(),
             Event::HardBreak => self.finish_line(),
             Event::Rule => {
                 if !self.current_spans.is_empty() {
@@ -508,6 +507,24 @@ impl<'a> MappedMarkdownRenderer<'a> {
         range: std::ops::Range<usize>,
     ) -> Option<std::ops::Range<usize>> {
         find_footnote_definition_prefix_range(self.input, range)
+    }
+
+    fn inline_code_source_range(
+        &self,
+        range: std::ops::Range<usize>,
+        code: &str,
+    ) -> std::ops::Range<usize> {
+        if code.is_empty() {
+            return range.start..range.start;
+        }
+        self.input
+            .get(range.clone())
+            .and_then(|slice| slice.find(code))
+            .map(|offset| {
+                let start = range.start + offset;
+                start..start + code.len()
+            })
+            .unwrap_or(range)
     }
 
     fn finish_line(&mut self) {
@@ -1475,6 +1492,16 @@ mod tests {
     }
 
     #[test]
+    fn mapped_renderer_preserves_softbreak_rows_for_editing() {
+        let doc = render_markdown_mapped("alpha\nx\n# Heading");
+
+        assert_eq!(doc.lines[0].plain_text(), "alpha");
+        assert_eq!(doc.lines[1].plain_text(), "x");
+        assert_eq!(doc.source_to_display(6), Some((1, 0)));
+        assert_eq!(doc.display_to_source(1, 0), Some(6));
+    }
+
+    #[test]
     fn mapped_renderer_maps_empty_document_to_start() {
         let doc = render_markdown_mapped("");
 
@@ -1559,6 +1586,17 @@ mod tests {
         assert_eq!(doc.source_to_display(7), Some((0, 4)));
         assert_eq!(doc.source_to_display(8), Some((0, 4)));
         assert_eq!(doc.display_to_source(0, 11), Some(16));
+    }
+
+    #[test]
+    fn mapped_renderer_maps_inline_code_markers_to_visible_boundaries() {
+        let doc = render_markdown_mapped("`code`");
+
+        assert_eq!(doc.display_to_source(0, 0), Some(1));
+        assert_eq!(doc.source_to_display(0), Some((0, 0)));
+        assert_eq!(doc.source_to_display(1), Some((0, 0)));
+        assert_eq!(doc.source_to_display(5), Some((0, 4)));
+        assert_eq!(doc.source_to_display(6), Some((0, 4)));
     }
 
     #[test]
