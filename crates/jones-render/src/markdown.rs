@@ -147,7 +147,17 @@ impl RenderedDocument {
             if let Some(line_source) = &line.source
                 && (line_source.char_start..=line_source.char_end).contains(&char_pos)
             {
-                return Some((row, display_col));
+                return Some((
+                    row,
+                    if !seen_source_span
+                        && !line.spans.is_empty()
+                        && char_pos <= line_source.char_start
+                    {
+                        0
+                    } else {
+                        display_col
+                    },
+                ));
             }
         }
 
@@ -251,6 +261,8 @@ impl<'a> MappedMarkdownRenderer<'a> {
                 if !self.current_spans.is_empty() {
                     self.finish_line();
                 }
+                let range = trim_trailing_line_ending(self.input, range);
+                self.set_pending_line_source(range);
                 self.push_visual("─".repeat(32), Style::default().fg(theme::rule()));
                 self.finish_line();
                 self.lines.push(RenderedLine::default());
@@ -610,20 +622,47 @@ fn display_col_to_char_offset(text: &str, display_col: usize) -> usize {
 }
 
 fn assign_blank_line_sources(doc: &mut RenderedDocument, input: &str) {
-    let mut blank_starts = physical_blank_line_char_starts(input).into_iter();
-    for line in &mut doc.lines {
-        if line.source.is_none()
-            && line.spans.is_empty()
-            && let Some(char_pos) = blank_starts.next()
-        {
-            let byte_pos = byte_offset_for_char(input, char_pos);
-            line.source = Some(SourceRange {
-                byte_start: byte_pos,
-                byte_end: byte_pos,
-                char_start: char_pos,
-                char_end: char_pos,
-            });
+    let blank_starts = physical_blank_line_char_starts(input);
+    let mut blank_idx = 0usize;
+    let mut lines = Vec::with_capacity(doc.lines.len().max(blank_starts.len()));
+
+    for line in std::mem::take(&mut doc.lines) {
+        if let Some(source) = &line.source {
+            while let Some(&char_pos) = blank_starts.get(blank_idx)
+                && char_pos < source.char_start
+            {
+                lines.push(blank_rendered_line(input, char_pos));
+                blank_idx += 1;
+            }
         }
+
+        if line.source.is_some() || !line.spans.is_empty() {
+            lines.push(line);
+        }
+    }
+
+    while let Some(&char_pos) = blank_starts.get(blank_idx) {
+        lines.push(blank_rendered_line(input, char_pos));
+        blank_idx += 1;
+    }
+
+    doc.lines = lines;
+}
+
+fn blank_rendered_line(input: &str, char_pos: usize) -> RenderedLine {
+    RenderedLine {
+        spans: Vec::new(),
+        source: Some(blank_line_source_range(input, char_pos)),
+    }
+}
+
+fn blank_line_source_range(input: &str, char_pos: usize) -> SourceRange {
+    let byte_pos = byte_offset_for_char(input, char_pos);
+    SourceRange {
+        byte_start: byte_pos,
+        byte_end: byte_pos,
+        char_start: char_pos,
+        char_end: char_pos,
     }
 }
 
@@ -653,6 +692,14 @@ fn byte_offset_for_char(input: &str, char_pos: usize) -> usize {
         .nth(char_pos)
         .map(|(idx, _)| idx)
         .unwrap_or(input.len())
+}
+
+fn trim_trailing_line_ending(input: &str, range: std::ops::Range<usize>) -> std::ops::Range<usize> {
+    let Some(slice) = input.get(range.clone()) else {
+        return range;
+    };
+    let trimmed = slice.trim_end_matches('\n').trim_end_matches('\r');
+    range.start..range.start + trimmed.len()
 }
 
 fn find_table_delimiter_byte_range(
@@ -1499,6 +1546,66 @@ mod tests {
         assert_eq!(doc.lines[1].plain_text(), "x");
         assert_eq!(doc.source_to_display(6), Some((1, 0)));
         assert_eq!(doc.display_to_source(1, 0), Some(6));
+    }
+
+    #[test]
+    fn mapped_renderer_drops_unbacked_structural_blank_rows_for_editing() {
+        let doc = render_markdown_mapped("# Heading\nx");
+
+        assert_eq!(
+            doc.lines
+                .iter()
+                .map(RenderedLine::plain_text)
+                .collect::<Vec<_>>(),
+            vec!["Heading", "x"]
+        );
+        assert_eq!(doc.source_to_display(10), Some((1, 0)));
+    }
+
+    #[test]
+    fn mapped_renderer_inserts_physical_blanks_in_source_order() {
+        let doc = render_markdown_mapped("# H\npara\n\nnext");
+
+        assert_eq!(
+            doc.lines
+                .iter()
+                .map(RenderedLine::plain_text)
+                .collect::<Vec<_>>(),
+            vec!["H", "para", "", "next"]
+        );
+        assert_eq!(doc.source_to_display(9), Some((2, 0)));
+        assert_eq!(doc.display_to_source(2, 0), Some(9));
+    }
+
+    #[test]
+    fn mapped_renderer_keeps_blank_before_horizontal_rule_in_source_order() {
+        let doc = render_markdown_mapped("\n---\nnext");
+
+        assert_eq!(
+            doc.lines
+                .iter()
+                .map(RenderedLine::plain_text)
+                .collect::<Vec<_>>(),
+            vec!["".to_string(), "─".repeat(32), "next".to_string()]
+        );
+        assert_eq!(doc.source_to_display(0), Some((0, 0)));
+        assert_eq!(doc.source_to_display(1), Some((1, 0)));
+        assert_eq!(doc.display_to_source(1, 0), Some(1));
+    }
+
+    #[test]
+    fn mapped_renderer_preserves_multiple_physical_blank_rows_for_editing() {
+        let doc = render_markdown_mapped("a\n\n\nb");
+
+        assert_eq!(
+            doc.lines
+                .iter()
+                .map(RenderedLine::plain_text)
+                .collect::<Vec<_>>(),
+            vec!["a", "", "", "b"]
+        );
+        assert_eq!(doc.source_to_display(2), Some((1, 0)));
+        assert_eq!(doc.source_to_display(3), Some((2, 0)));
     }
 
     #[test]

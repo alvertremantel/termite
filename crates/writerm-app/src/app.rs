@@ -476,10 +476,7 @@ impl WritermApp {
                 {
                     Some(source)
                 } else {
-                    visual.display_to_source(row, col + 1).or_else(|| {
-                        (row + 1 < visual.rows.len())
-                            .then(|| search_mapped_rows_forward(&visual, row + 1, 0))?
-                    })
+                    next_visual_source_after(&visual, row, col, current)
                 }
             }
         };
@@ -823,6 +820,30 @@ fn search_mapped_rows_backward(
     (0..=start_row)
         .rev()
         .find_map(|row| visual.display_to_source(row, target_col))
+}
+
+fn next_visual_source_after(
+    visual: &crate::visual::VisualDocument,
+    start_row: usize,
+    start_col: usize,
+    current: usize,
+) -> Option<usize> {
+    let mut row = start_row;
+    let mut col = start_col.saturating_add(1);
+    while row < visual.rows.len() {
+        let row_width = visual.row_width(row).unwrap_or_default();
+        while col <= row_width {
+            if let Some(source) = visual.display_to_source(row, col)
+                && source > current
+            {
+                return Some(source);
+            }
+            col += 1;
+        }
+        row += 1;
+        col = 0;
+    }
+    None
 }
 
 fn resolve_launch_target(maybe_path: Option<PathBuf>) -> (PathBuf, Option<PathBuf>) {
@@ -1360,6 +1381,61 @@ mod tests {
     }
 
     #[test]
+    fn typing_on_blank_line_after_down_from_wrapped_heading_stays_put() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "# Heading\n\nalpha beta gamma delta").unwrap();
+        let mut app = app_at(path);
+        app.document_area = Rect::new(0, 0, 4, 8);
+        app.editor.move_cursor_to_char_pos(7);
+
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+
+        let insert_pos = app.editor.cursor_char_pos();
+        assert_eq!(insert_pos, 10);
+        let visible_cursor = app.visual_document().source_to_display(insert_pos);
+        assert_eq!(visible_cursor, Some((2, 0)));
+        assert_eq!(app.visual_document().row_width(2), Some(0));
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+
+        assert_eq!(
+            app.visual_document().source_to_display(insert_pos),
+            visible_cursor
+        );
+    }
+
+    #[test]
+    fn down_from_heading_reaches_intervening_text_before_later_blank_line() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "# Heading\npara\n\nnext").unwrap();
+        let mut app = app_at(path);
+        app.document_area = Rect::new(0, 0, 40, 8);
+        app.editor.move_cursor_to_char_pos(2);
+
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+
+        assert_eq!(app.editor.cursor_char_pos(), 10);
+        assert_eq!(app.visual_document().source_to_display(10), Some((1, 0)));
+
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+
+        let insert_pos = app.editor.cursor_char_pos();
+        assert_eq!(insert_pos, 15);
+        let visible_cursor = app.visual_document().source_to_display(insert_pos);
+        assert_eq!(visible_cursor, Some((2, 0)));
+        assert_eq!(app.visual_document().row_width(2), Some(0));
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+
+        assert_eq!(
+            app.visual_document().source_to_display(insert_pos),
+            visible_cursor
+        );
+    }
+
+    #[test]
     fn modified_vertical_keys_do_not_fall_back_to_raw_source_movement() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("note.md");
@@ -1407,6 +1483,21 @@ mod tests {
 
         assert_eq!(app.editor.cursor_char_pos(), 3);
         assert_eq!(app.visual_document().source_to_display(3), Some((0, 1)));
+    }
+
+    #[test]
+    fn rendered_right_arrow_moves_from_horizontal_rule_to_next_line() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "---\nnext").unwrap();
+        let mut app = app_at(path);
+        app.document_area = Rect::new(0, 0, 40, 8);
+        app.editor.move_cursor_to_char_pos(3);
+
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+
+        assert_eq!(app.editor.cursor_char_pos(), 4);
+        assert_eq!(app.visual_document().source_to_display(4), Some((1, 0)));
     }
 
     #[test]

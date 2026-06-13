@@ -165,12 +165,14 @@ impl VisualRow {
         }
     }
 
-    fn from_cells(mut cells: Vec<Cell>, trim_edges: bool) -> Self {
+    fn from_cells(mut cells: Vec<Cell>, trim_edges: bool, fallback_source: Option<usize>) -> Self {
         if trim_edges {
             trim_edge_spaces(&mut cells);
         }
         if cells.is_empty() {
-            return Self::blank(0);
+            return fallback_source
+                .map(Self::blank)
+                .unwrap_or_else(|| Self::blank(0));
         }
 
         let first_source = cells
@@ -180,10 +182,10 @@ impl VisualRow {
             .iter()
             .rev()
             .find_map(|cell| cell.source.map(|(_, end)| end));
-        let source_start = first_source.unwrap_or(0);
-        let source_end = last_source.unwrap_or(source_start);
+        let source_start = first_source.or(fallback_source).unwrap_or(0);
+        let source_end = last_source.or(fallback_source).unwrap_or(source_start);
 
-        let fallback_source = first_source.unwrap_or(source_start);
+        let fallback_source = first_source.or(fallback_source).unwrap_or(source_start);
         let mut spans = Vec::new();
         let mut col_sources = Vec::new();
         let mut boundaries = vec![(source_start, 0)];
@@ -361,7 +363,7 @@ fn wrap_cells(
         ];
     }
 
-    let mut wrapper = CellWrapper::new(width, trim_edges);
+    let mut wrapper = CellWrapper::new(width, trim_edges, line_source.map(|(start, _)| start));
     for cell in cells {
         wrapper.push(cell);
     }
@@ -380,16 +382,18 @@ fn wrap_cells(
 struct CellWrapper {
     width: usize,
     trim_edges: bool,
+    fallback_source: Option<usize>,
     rows: Vec<VisualRow>,
     current: Vec<Cell>,
     current_width: usize,
 }
 
 impl CellWrapper {
-    fn new(width: usize, trim_edges: bool) -> Self {
+    fn new(width: usize, trim_edges: bool, fallback_source: Option<usize>) -> Self {
         Self {
             width,
             trim_edges,
+            fallback_source,
             rows: Vec::new(),
             current: Vec::new(),
             current_width: 0,
@@ -441,6 +445,7 @@ impl CellWrapper {
         self.rows.push(VisualRow::from_cells(
             std::mem::take(&mut self.current),
             self.trim_edges,
+            self.fallback_source,
         ));
         self.current_width = 0;
     }
@@ -451,8 +456,11 @@ impl CellWrapper {
 
     fn finish(mut self) -> Vec<VisualRow> {
         if !self.current.is_empty() {
-            self.rows
-                .push(VisualRow::from_cells(self.current, self.trim_edges));
+            self.rows.push(VisualRow::from_cells(
+                self.current,
+                self.trim_edges,
+                self.fallback_source,
+            ));
         }
         if self.rows.is_empty() {
             self.rows.push(VisualRow::unmapped_blank());
@@ -645,6 +653,20 @@ mod tests {
         for char_pos in 0..=3 {
             assert_eq!(doc.source_to_display(char_pos), Some((0, 0)));
         }
+    }
+
+    #[test]
+    fn rendered_visual_only_rows_use_line_source_as_anchor() {
+        let rendered = render_markdown_mapped("\n---\nnext");
+        let doc = VisualDocument::from_rendered(&rendered, 40);
+
+        assert_eq!(doc.rows[0].to_line().to_string(), "");
+        assert_eq!(doc.rows[1].to_line().to_string(), "─".repeat(32));
+        assert_eq!(doc.rows[2].to_line().to_string(), "next");
+        assert_eq!(doc.source_to_display(0), Some((0, 0)));
+        assert_eq!(doc.source_to_display(1), Some((1, 0)));
+        assert_eq!(doc.source_to_display(4), Some((1, 32)));
+        assert_eq!(doc.display_to_source(1, 4), Some(1));
     }
 
     #[test]
