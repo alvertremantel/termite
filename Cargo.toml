@@ -29,6 +29,8 @@ members = [
 exclude = ["termite/.worktrees/*"]
 
 [workspace.package]
+name = "termite_suite"
+version = "0.1.1"
 edition = "2024"
 authors = ["Geosmin Jones"]
 
