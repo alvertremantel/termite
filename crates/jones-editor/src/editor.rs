@@ -686,29 +686,36 @@ impl EditorContext {
         }
     }
 
-    /// Handle Tab key: indent selected lines or insert 4 spaces.
+    /// Handle Tab key: indent selected lines or insert a tab character.
+    ///
+    /// We insert a single `'\t'` source character rather than a fixed run of
+    /// spaces so the underlying file stays small and the writerm virtual
+    /// document can render the indent at its own width (currently 3 cells).
+    /// Files loaded from disk that already contain tab characters render the
+    /// same way, so the behavior stays consistent.
     fn handle_tab(&mut self) {
         if let Some(sel) = &self.state.selection {
             let ((start_line, _), (end_line, _)) = sel.normalized();
-            // Indent all lines in the selection by 4 spaces.
-            // Work from last line to first to preserve char offsets.
+            // Indent all lines in the selection with one tab each. Work from
+            // last line to first to preserve char offsets.
             let first = start_line;
             let last = end_line;
             self.state.clear_selection();
             for line_idx in (first..=last).rev() {
                 let line_start = self.buffer.rope().line_to_char(line_idx);
-                self.buffer.insert_str(line_start, "    ");
+                self.buffer.insert_str(line_start, "\t");
             }
-            // Adjust cursor column.
-            self.state.cursor_col += 4;
+            // Adjust cursor column by one source character; the visual
+            // column is the renderer's job.
+            self.state.cursor_col += 1;
             self.state.desired_col = self.state.cursor_col;
         } else {
-            // No selection: insert 4 spaces at cursor.
+            // No selection: insert a single tab at cursor.
             self.delete_selection_if_any();
             let rope = self.buffer.rope();
             let pos = rope.line_to_char(self.state.cursor_line) + self.state.cursor_col;
-            self.buffer.insert_str(pos, "    ");
-            self.state.cursor_col += 4;
+            self.buffer.insert_str(pos, "\t");
+            self.state.cursor_col += 1;
             self.state.desired_col = self.state.cursor_col;
         }
     }
@@ -733,8 +740,15 @@ impl EditorContext {
         self.state.desired_col = self.state.cursor_col;
     }
 
-    /// Remove up to 4 leading spaces from the given line.
+    /// Remove one level of indent from the given line.
+    ///
+    /// If the line begins with a tab character, that single tab is removed
+    /// (matches the editor's own `handle_tab` insertion). Otherwise, up to
+    /// three leading spaces are removed, matching the writerm virtual
+    /// document's tab width of 3 cells so space-indented files outdent
+    /// cleanly with Shift+Tab.
     fn outdent_line(&mut self, line_idx: usize) {
+        const OUTDENT_WIDTH: usize = 3;
         let (line_start, remove_count) = {
             let rope = self.buffer.rope();
             if line_idx >= rope.len_lines() {
@@ -742,14 +756,12 @@ impl EditorContext {
             }
             let line_start = rope.line_to_char(line_idx);
             let line_slice = rope.line(line_idx);
-            let mut remove = 0usize;
-            for ch in line_slice.chars().take(4) {
-                if ch == ' ' {
-                    remove += 1;
-                } else {
-                    break;
-                }
-            }
+            let mut chars = line_slice.chars();
+            let remove = match chars.next() {
+                Some('\t') => 1,
+                Some(' ') => OUTDENT_WIDTH,
+                _ => 0,
+            };
             (line_start, remove)
         };
 
@@ -1716,12 +1728,30 @@ mod tests {
     }
 
     #[test]
-    fn tab_inserts_four_spaces() {
+    fn tab_inserts_a_single_tab_character() {
         let mut ed = EditorContext::from_content("text");
         set_cursor(&mut ed, 0, 0);
         ed.handle_key(key(KeyCode::Tab));
-        assert_eq!(ed.text(), "    text");
-        assert_eq!(ed.state.cursor_col, 4);
+        assert_eq!(ed.text(), "\ttext");
+        assert_eq!(ed.state.cursor_col, 1);
+    }
+
+    #[test]
+    fn shift_tab_outdents_a_tab_indented_line() {
+        let mut ed = EditorContext::from_content("\tindented");
+        set_cursor(&mut ed, 0, 1);
+        ed.handle_key(key(KeyCode::BackTab));
+        assert_eq!(ed.text(), "indented");
+        assert_eq!(ed.state.cursor_col, 0);
+    }
+
+    #[test]
+    fn shift_tab_outdents_up_to_three_leading_spaces() {
+        let mut ed = EditorContext::from_content("   indented");
+        set_cursor(&mut ed, 0, 3);
+        ed.handle_key(key(KeyCode::BackTab));
+        assert_eq!(ed.text(), "indented");
+        assert_eq!(ed.state.cursor_col, 0);
     }
 
     #[test]

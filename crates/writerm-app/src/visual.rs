@@ -4,6 +4,13 @@ use ratatui::text::{Line, Span, Text};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+/// Visual width of a single `\t` source character in the writerm document
+/// surface. The editor's Tab key inserts a tab character; the virtual
+/// document expands it to this many cells of whitespace so indent levels
+/// line up consistently across the writing area regardless of the
+/// underlying source text.
+pub(crate) const TAB_WIDTH: usize = 3;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WrapMode {
     Source,
@@ -48,18 +55,31 @@ impl VisualDocument {
             let content = line.trim_end_matches('\n').trim_end_matches('\r');
             let line_len = content.chars().count();
             let mut rel_chars = 0usize;
-            let cells = content
-                .graphemes(true)
-                .map(|grapheme| {
-                    let start = char_start + rel_chars;
-                    rel_chars += grapheme.chars().count();
-                    Cell {
+            let mut cells: Vec<Cell> = Vec::new();
+            for grapheme in content.graphemes(true) {
+                let grapheme_chars = grapheme.chars().count();
+                let start = char_start + rel_chars;
+                rel_chars += grapheme_chars;
+                if grapheme == "\t" {
+                    // A single source tab expands into TAB_WIDTH cells of
+                    // whitespace. All cells map back to the same source
+                    // character so the cursor can address any of them.
+                    let tab_end = char_start + rel_chars;
+                    for _ in 0..TAB_WIDTH {
+                        cells.push(Cell {
+                            text: " ".to_string(),
+                            style,
+                            source: Some((start, tab_end)),
+                        });
+                    }
+                } else {
+                    cells.push(Cell {
                         text: grapheme.to_string(),
                         style,
                         source: Some((start, char_start + rel_chars)),
-                    }
-                })
-                .collect::<Vec<_>>();
+                    });
+                }
+            }
             rows.extend(wrap_cells(
                 cells,
                 Some((char_start, char_start + line_len)),
@@ -523,6 +543,34 @@ fn rendered_line_cells(line: &RenderedLine) -> Vec<Cell> {
         let mut rel_chars = 0usize;
         for grapheme in span.content.graphemes(true) {
             let grapheme_len = grapheme.chars().count();
+            // A single source tab expands into TAB_WIDTH cells of
+            // whitespace. The rendered path sees the tab the same way the
+            // source-peek path does so cursor positions stay consistent
+            // between the two views.
+            if grapheme == "\t" {
+                let Some(source) = span.source.as_ref() else {
+                    // No source mapping: still need to advance rel_chars
+                    // so subsequent spans stay in sync.
+                    rel_chars += grapheme_len;
+                    cells.push(Cell {
+                        text: " ".repeat(TAB_WIDTH),
+                        style: span.style,
+                        source: None,
+                    });
+                    continue;
+                };
+                let start = (source.char_start + rel_chars).min(source.char_end);
+                rel_chars += grapheme_len;
+                let end = (source.char_start + rel_chars).min(source.char_end);
+                for _ in 0..TAB_WIDTH {
+                    cells.push(Cell {
+                        text: " ".to_string(),
+                        style: span.style,
+                        source: Some((start, end)),
+                    });
+                }
+                continue;
+            }
             cells.push(Cell {
                 text: grapheme.to_string(),
                 style: span.style,
@@ -753,5 +801,49 @@ mod tests {
         let doc = VisualDocument::from_rendered(&rendered, 20);
 
         assert_eq!(doc.source_to_display(2), Some((0, 0)));
+    }
+
+    #[test]
+    fn source_mode_expands_tabs_to_three_cells_of_whitespace() {
+        let doc = VisualDocument::from_source("\tindented", 20, Style::default());
+
+        // A single tab source character produces three " " display cells
+        // followed by the 8 cells of "indented", for 11 cells total.
+        assert_eq!(doc.row_width(0), Some(11));
+        assert_eq!(doc.rows[0].to_line().to_string(), "   indented");
+    }
+
+    #[test]
+    fn source_mode_maps_every_tab_cell_back_to_the_same_source_character() {
+        let doc = VisualDocument::from_source("\tindented", 20, Style::default());
+
+        // Each of the three cells produced by a single tab maps to source
+        // position 0 (the tab itself). Subsequent cells map to positions
+        // 1..9 covering "indented".
+        for col in 0..3 {
+            assert_eq!(
+                doc.display_to_source(0, col),
+                Some(0),
+                "tab cell {col} should map back to the tab source char"
+            );
+        }
+        assert_eq!(doc.display_to_source(0, 3), Some(1));
+    }
+
+    #[test]
+    fn multiple_tabs_indent_consistently_in_source_mode() {
+        let doc = VisualDocument::from_source("\t\talpha", 20, Style::default());
+
+        // Two tab characters expand to six cells of whitespace followed
+        // by the five cells of "alpha", for 11 cells total.
+        assert_eq!(doc.row_width(0), Some(11));
+        assert_eq!(doc.rows[0].to_line().to_string(), "      alpha");
+        // The first three cells belong to the first tab, the next three
+        // to the second tab, and the remaining cells to "alpha".
+        assert_eq!(doc.display_to_source(0, 0), Some(0));
+        assert_eq!(doc.display_to_source(0, 2), Some(0));
+        assert_eq!(doc.display_to_source(0, 3), Some(1));
+        assert_eq!(doc.display_to_source(0, 5), Some(1));
+        assert_eq!(doc.display_to_source(0, 6), Some(2));
     }
 }
