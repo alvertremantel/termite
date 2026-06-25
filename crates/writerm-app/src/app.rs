@@ -27,6 +27,10 @@ pub struct WritermApp {
     pub editor: EditorContext,
     pub rendered: RenderedDocument,
     rendered_version: u64,
+    cached_visual: crate::visual::VisualDocument,
+    cached_visual_version: u64,
+    cached_visual_width: usize,
+    cached_visual_source_peek: bool,
     pub outline_entries: Vec<OutlineEntry>,
     pub workspace_entries: Vec<WorkspaceEntry>,
     pub workspace_summary: workspace::WorkspaceSummary,
@@ -88,6 +92,10 @@ impl WritermApp {
             editor,
             rendered,
             rendered_version: 0,
+            cached_visual: crate::visual::VisualDocument { rows: Vec::new() },
+            cached_visual_version: u64::MAX,
+            cached_visual_width: 0,
+            cached_visual_source_peek: !source_peek,
             outline_entries,
             workspace_entries,
             workspace_summary,
@@ -443,6 +451,7 @@ impl WritermApp {
         self.refresh_workspace();
         self.refresh_document_metadata();
         self.refresh_render_cache_force();
+        self.cached_visual_version = u64::MAX;
         self.notification = Some(("Opened".into(), Instant::now(), false));
         true
     }
@@ -641,6 +650,28 @@ impl WritermApp {
         self.rendered_version = self.editor.buffer.version();
     }
 
+    fn refresh_visual_cache(&mut self) {
+        let version = self.editor.buffer.version();
+        let width = self.document_area.width.max(1) as usize;
+        if self.cached_visual_version != version
+            || self.cached_visual_width != width
+            || self.cached_visual_source_peek != self.source_peek
+        {
+            self.cached_visual = if self.source_peek {
+                crate::visual::VisualDocument::from_source(
+                    &self.editor.text(),
+                    width,
+                    ratatui::style::Style::default().fg(theme::text_primary()),
+                )
+            } else {
+                crate::visual::VisualDocument::from_rendered(&self.rendered, width)
+            };
+            self.cached_visual_version = version;
+            self.cached_visual_width = width;
+            self.cached_visual_source_peek = self.source_peek;
+        }
+    }
+
     pub fn word_count(&self) -> usize {
         self.editor.text().split_whitespace().count()
     }
@@ -688,17 +719,10 @@ impl WritermApp {
         self.document_scroll = self.document_scroll.min(max_scroll);
     }
 
-    pub(crate) fn visual_document(&self) -> crate::visual::VisualDocument {
-        let width = self.document_area.width.max(1) as usize;
-        if self.source_peek {
-            crate::visual::VisualDocument::from_source(
-                &self.editor.text(),
-                width,
-                ratatui::style::Style::default().fg(theme::text_primary()),
-            )
-        } else {
-            crate::visual::VisualDocument::from_rendered(&self.rendered, width)
-        }
+    pub(crate) fn visual_document(&mut self) -> crate::visual::VisualDocument {
+        self.refresh_render_cache();
+        self.refresh_visual_cache();
+        self.cached_visual.clone()
     }
 }
 
